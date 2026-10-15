@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Env / secrets
+.env
+*.pem
+*.key
+hf_token*
+credentials*
+
+# Logs and local runtime
+logs/
+*.jsonl
+
+# Benchmark outputs (keep directory via .gitkeep)
+bench/results/*.csv
+bench/results/*.json
+bench/results/*.png
+!bench/results/.gitkeep
+
+# Model weights / adapters / datasets — never commit
+*.pt
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+checkpoints/
+spider_project/
+**/adapter_model*
+**/adapter_config.json
+data/spider/
+*.sqlite
+*.zip
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+_nb_extract.txt

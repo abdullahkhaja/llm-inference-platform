@@ -1,0 +1,13 @@
+# Separate training environment — DO NOT install into Phase 1 serving image.
+# Use a GPU machine / Colab with CUDA-enabled PyTorch first, then:
+transformers>=4.50,<5
+trl>=0.18,<1
+peft>=0.15,<1
+accelerate>=1.3,<2
+bitsandbytes>=0.45,<1
+datasets>=3,<5
+huggingface_hub>=0.30,<2
+sqlparse
+nltk
+pandas
+tqdm
