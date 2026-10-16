@@ -34,6 +34,19 @@ def test_summarize_metrics() -> None:
     assert summary["timeouts"] == 1
     assert abs(summary["rps"] - 3.0) < 1e-9
     assert abs(summary["simulated_output_tokens_per_sec"] - 30.0) < 1e-9
+    assert summary["note"]
     assert abs(summary["mean_latency_s"] - 0.2) < 1e-9
     assert abs(summary["p50_latency_s"] - 0.2) < 1e-9
     assert "p99_caveat" in summary
+
+
+def test_summarize_real_label() -> None:
+    records = [
+        RequestRecord(1, 0, True, 200, 0.10, 0.0, 90.0, 10, 20, "", False),
+        RequestRecord(1, 1, True, 200, 0.20, 0.0, 180.0, 10, 20, "", False),
+    ]
+    summary = summarize(records, wall_s=1.0)
+    assert summary["simulated"] is False
+    assert "output_tokens_per_sec" in summary
+    assert abs(summary["output_tokens_per_sec"] - 20.0) < 1e-9
+    assert abs(summary["mean_latency_s"] - 0.15) < 1e-9

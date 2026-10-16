@@ -1,4 +1,4 @@
-# Phase 1: FastAPI (mock) + Prometheus + Grafana — CPU only, $0 GPU spend
+# Phase 1: FastAPI (mock) + Prometheus + Grafana — CPU only
 services:
   api:
     build:

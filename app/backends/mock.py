@@ -6,9 +6,14 @@ import asyncio
 import math
 import random
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, AsyncIterator
 
-from app.backends.base import Backend, GenerationRequest, GenerationResult
+from app.backends.base import (
+    Backend,
+    GenerationRequest,
+    GenerationResult,
+    StreamEvent,
+)
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -110,10 +115,45 @@ class MockBackend(Backend):
                 decode_s=max(0.0, inference_s - prefill_s),
                 simulated=True,
                 backend=self.name,
-                metadata={"note": "simulated_mock_inference"},
+                ttft_s=prefill_s,
+                metadata={"note": "simulated_mock_inference", "measurements": "simulated"},
             )
         finally:
             self._lock.release()
+
+    async def generate_stream(
+        self, request: GenerationRequest
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream simulated tokens (CPU-only; for local SSE testing)."""
+        result = await self.generate(request)
+        # Emit the SQL in small chunks so clients can exercise SSE parsing.
+        chunk_size = max(1, len(result.text) // max(1, min(result.output_tokens, 32)))
+        text = result.text
+        first = True
+        for i in range(0, len(text), chunk_size):
+            piece = text[i : i + chunk_size]
+            if first:
+                first = False
+            yield StreamEvent(
+                event="token",
+                data={"text": piece, "request_id": request.request_id},
+            )
+            await asyncio.sleep(0)  # yield control
+        yield StreamEvent(
+            event="usage",
+            data={
+                "request_id": request.request_id,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "ttft_s": result.ttft_s,
+                "inference_s": result.inference_s,
+                "queue_wait_s": result.queue_wait_s,
+                "simulated": True,
+                "backend": self.name,
+                "sql": result.text,
+            },
+        )
+        yield StreamEvent(event="done", data={"request_id": request.request_id})
 
     @staticmethod
     async def _sleep_until(deadline: float) -> None:

@@ -22,9 +22,14 @@ spider_project/
 .ruff_cache/
 README.md
 tests/
-ops/
+ops/grafana/
+ops/prometheus.yml
+ops/cost_tracker.md
+!ops/runpod/
 _nb_extract.txt
 **/.DS_Store
 .dockerignore
 Dockerfile
 docker-compose.yml
+docker-compose.gpu.yml
+Dockerfile.gpu

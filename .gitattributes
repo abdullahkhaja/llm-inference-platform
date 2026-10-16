@@ -1,0 +1,2 @@
+ops/runpod/*.sh text eol=lf
+ops/runpod/entrypoint.sh text eol=lf

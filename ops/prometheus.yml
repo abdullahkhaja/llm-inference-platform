@@ -9,5 +9,5 @@ scrape_configs:
       - targets:
           - api:8000
         labels:
-          phase: "1"
-          measurements: simulated_mock
+          component: fastapi
+          # mode=simulated|real is emitted on metric labels by the app

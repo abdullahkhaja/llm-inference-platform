@@ -58,13 +58,22 @@ def percentile(values: list[float], p: float) -> float:
 def summarize(records: list[RequestRecord], wall_s: float) -> dict:
     ok = [r for r in records if r.ok]
     latencies = [r.latency_s for r in ok]
-    queue_waits = [r.queue_wait_ms for r in ok]
+    queue_waits = [r.queue_wait_ms for r in ok if r.queue_wait_ms is not None]
     failures = len(records) - len(ok)
     timeouts = sum(1 for r in records if "timeout" in r.error.lower())
     total_out_tokens = sum(r.output_tokens for r in ok)
+    simulated = all(r.simulated for r in ok) if ok else True
+    tok_key = (
+        "simulated_output_tokens_per_sec" if simulated else "output_tokens_per_sec"
+    )
+    note = (
+        "Mock backend — not real model performance"
+        if simulated
+        else "Real remote vLLM backend — engine token counts"
+    )
     return {
-        "simulated": True,
-        "note": "Phase 1 mock backend — not real model performance",
+        "simulated": simulated,
+        "note": note,
         "requests": len(records),
         "successes": len(ok),
         "failures": failures,
@@ -73,14 +82,14 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
         "timeout_rate": timeouts / len(records) if records else 0.0,
         "wall_seconds": wall_s,
         "rps": len(ok) / wall_s if wall_s > 0 else 0.0,
-        "simulated_output_tokens_per_sec": total_out_tokens / wall_s if wall_s > 0 else 0.0,
+        tok_key: total_out_tokens / wall_s if wall_s > 0 else 0.0,
         "mean_latency_s": statistics.fmean(latencies) if latencies else float("nan"),
         "p50_latency_s": percentile(latencies, 50),
         "p95_latency_s": percentile(latencies, 95),
         "p99_latency_s": percentile(latencies, 99),
         "mean_queue_wait_ms": statistics.fmean(queue_waits) if queue_waits else float("nan"),
-        "p50_queue_wait_ms": percentile(queue_waits, 50),
-        "p95_queue_wait_ms": percentile(queue_waits, 95),
+        "p50_queue_wait_ms": percentile(queue_waits, 50) if queue_waits else float("nan"),
+        "p95_queue_wait_ms": percentile(queue_waits, 95) if queue_waits else float("nan"),
         "p99_caveat": (
             "p99 estimates from small samples are unreliable; "
             "use --requests 1000+ for stronger tail-latency signal"
@@ -120,14 +129,16 @@ async def one_request(
                 error=resp.text[:200],
             )
         data = resp.json()
+        qw = data.get("queue_wait_ms")
+        inf = data.get("inference_ms")
         return RequestRecord(
             concurrency=concurrency,
             index=index,
             ok=True,
             http_status=200,
             latency_s=latency,
-            queue_wait_ms=float(data.get("queue_wait_ms", 0.0)),
-            inference_ms=float(data.get("inference_ms", 0.0)),
+            queue_wait_ms=float(qw) if qw is not None else 0.0,
+            inference_ms=float(inf) if inf is not None else 0.0,
             output_tokens=int(data.get("output_tokens", 0)),
             input_tokens=int(data.get("input_tokens", 0)),
             error="",
@@ -220,7 +231,7 @@ def write_csv(path: Path, records: list[RequestRecord]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Phase 1 simulated load test")
+    p = argparse.ArgumentParser(description="Load test for /generate (mock or real vLLM)")
     p.add_argument("--base-url", default="http://127.0.0.1:8000")
     p.add_argument(
         "--concurrency",
@@ -236,6 +247,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-new-tokens", type=int, default=32)
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--seed", type=int, default=42, help="Reserved for future payload RNG")
+    p.add_argument(
+        "--label",
+        default="auto",
+        help="Filename prefix: auto|simulated|real (auto from first successful response)",
+    )
+    p.add_argument(
+        "--backend-info",
+        default="",
+        help="Optional free-text hardware / backend note stored in rollup JSON",
+    )
     p.add_argument(
         "--out-dir",
         type=Path,
@@ -257,7 +278,7 @@ async def amain() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("Phase 1 SIMULATED load test — not real model performance")
+    print("Load test — labels simulated/real from API responses")
     print(f"base_url={args.base_url} requests/level={args.requests} tokens={args.max_new_tokens}")
     if args.requests < 200:
         print(
@@ -267,6 +288,7 @@ async def amain() -> None:
     print("=" * 60)
 
     all_summaries: list[dict] = []
+    label = args.label
     for c in levels:
         print(f"\n--- concurrency={c} ---")
         records, summary = await run_concurrency(
@@ -276,21 +298,43 @@ async def amain() -> None:
             max_new_tokens=args.max_new_tokens,
             timeout_s=args.timeout,
         )
-        csv_path = out_dir / f"simulated_requests_c{c}_{stamp}.csv"
+        if label == "auto":
+            label = "simulated" if summary.get("simulated", True) else "real"
+        if args.backend_info:
+            summary["backend_info"] = args.backend_info
+        csv_path = out_dir / f"{label}_requests_c{c}_{stamp}.csv"
         write_csv(csv_path, records)
-        summary_path = out_dir / f"simulated_summary_c{c}_{stamp}.json"
+        summary_path = out_dir / f"{label}_summary_c{c}_{stamp}.json"
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         all_summaries.append(summary)
-        print(json.dumps({k: summary[k] for k in (
-            "concurrency", "rps", "simulated_output_tokens_per_sec",
-            "mean_latency_s", "p50_latency_s", "p95_latency_s", "p99_latency_s",
-            "mean_queue_wait_ms", "failure_rate",
-        )}, indent=2))
+        keys = [
+            "concurrency",
+            "rps",
+            "simulated",
+            "mean_latency_s",
+            "p50_latency_s",
+            "p95_latency_s",
+            "p99_latency_s",
+            "mean_queue_wait_ms",
+            "failure_rate",
+        ]
+        for extra in ("simulated_output_tokens_per_sec", "output_tokens_per_sec"):
+            if extra in summary:
+                keys.append(extra)
+        print(json.dumps({k: summary[k] for k in keys if k in summary}, indent=2))
         print(f"wrote {csv_path}")
 
-    rollup = out_dir / f"simulated_summary_all_{stamp}.json"
+    rollup = out_dir / f"{label}_summary_all_{stamp}.json"
     rollup.write_text(
-        json.dumps({"simulated": True, "levels": all_summaries}, indent=2),
+        json.dumps(
+            {
+                "simulated": label == "simulated",
+                "label": label,
+                "backend_info": args.backend_info or None,
+                "levels": all_summaries,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
     print(f"\nRollup: {rollup}")

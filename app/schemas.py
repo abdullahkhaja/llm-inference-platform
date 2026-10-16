@@ -23,7 +23,7 @@ class GenerateRequest(BaseModel):
     max_new_tokens: int = Field(
         default=128,
         ge=1,
-        description="Maximum simulated output tokens to generate",
+        description="Maximum output tokens to generate",
     )
 
     @field_validator("question", "db_schema")
@@ -36,7 +36,7 @@ class GenerateRequest(BaseModel):
 
 
 class GenerateResponse(BaseModel):
-    """Generation response. Phase 1 values are simulated."""
+    """Generation response. ``simulated`` reflects the active backend."""
 
     request_id: str
     sql: str
@@ -44,10 +44,13 @@ class GenerateResponse(BaseModel):
     simulated: bool = True
     input_tokens: int
     output_tokens: int
-    queue_wait_ms: float
-    inference_ms: float
+    queue_wait_ms: Optional[float] = None
+    inference_ms: Optional[float] = None
     latency_ms: float
-    simulated_output_tokens_per_sec: float
+    ttft_ms: Optional[float] = None
+    # Backward-compatible name from Phase 1; equals output_tokens_per_sec.
+    simulated_output_tokens_per_sec: Optional[float] = None
+    output_tokens_per_sec: Optional[float] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -58,6 +61,8 @@ class HealthResponse(BaseModel):
     simulated: bool = True
     queue_depth: int = 0
     version: str
+    vllm_base_url: Optional[str] = None
+    vllm_model_name: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):

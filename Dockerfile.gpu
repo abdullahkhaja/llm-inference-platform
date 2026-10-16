@@ -1,0 +1,32 @@
+# GPU vLLM OpenAI-compatible server for RunPod (not for local mock development).
+# Uses the official pinned image — do not build CUDA from source.
+#
+# Intended for a rented GPU pod (e.g. NVIDIA L4 24GB), not local mock development.
+
+ARG VLLM_IMAGE=vllm/vllm-openai:v0.8.5
+FROM ${VLLM_IMAGE}
+
+# Lightweight helper scripts for private HF adapter resolution.
+USER root
+RUN pip install --no-cache-dir "huggingface_hub>=0.30,<2"
+COPY ops/runpod/resolve_adapter.py /usr/local/bin/resolve_adapter.py
+COPY ops/runpod/entrypoint.sh /usr/local/bin/vllm-lora-entrypoint.sh
+RUN chmod +x /usr/local/bin/vllm-lora-entrypoint.sh /usr/local/bin/resolve_adapter.py
+
+ENV HF_HOME=/models/hf-cache \
+    TRANSFORMERS_CACHE=/models/hf-cache \
+    HUGGINGFACE_HUB_CACHE=/models/hf-cache \
+    VLLM_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    VLLM_MODEL_NAME=spider-sft \
+    ADAPTER_PATH= \
+    ADAPTER_SUBFOLDER=sft/final \
+    ADAPTER_LOCAL_DIR=/models/adapters/spider-sft \
+    MAX_MODEL_LEN=2048 \
+    GPU_MEMORY_UTILIZATION=0.85 \
+    MAX_LORA_RANK=16 \
+    PORT=8001
+
+VOLUME ["/models"]
+EXPOSE 8001
+
+ENTRYPOINT ["/usr/local/bin/vllm-lora-entrypoint.sh"]

@@ -28,10 +28,12 @@ def test_grafana_dashboard_and_datasource_provisioned() -> None:
     ds = ROOT / "ops/grafana/provisioning/datasources/prometheus.yml"
     dash_prov = ROOT / "ops/grafana/provisioning/dashboards/dashboards.yml"
     dash = ROOT / "ops/grafana/dashboards/phase1_mock_serving.json"
+    dash2 = ROOT / "ops/grafana/dashboards/phase2_real_serving.json"
     assert ds.is_file()
     assert "uid: prometheus" in ds.read_text(encoding="utf-8")
     assert dash_prov.is_file()
     assert dash.is_file()
+    assert dash2.is_file()
     content = dash.read_text(encoding="utf-8")
     assert "SIMULATED" in content
     assert "llm_request_latency_seconds" in content

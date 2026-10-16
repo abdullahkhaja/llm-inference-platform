@@ -1,0 +1,77 @@
+# GPU stack for RunPod (or any NVIDIA Docker host).
+# For rented NVIDIA hosts. Phase 1 local stack stays on docker-compose.yml (CPU mock).
+#
+# Typical use on a rented L4 pod after cloning this repo:
+#   export HF_TOKEN=...
+#   export ADAPTER_PATH=your-user/your-private-adapter
+#   docker compose -f docker-compose.gpu.yml up --build -d
+
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: llm-vllm
+    ports:
+      - "8001:8001"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - VLLM_MODEL=${MODEL_PATH:-meta-llama/Llama-3.1-8B-Instruct}
+      - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-spider-sft}
+      - ADAPTER_PATH=${ADAPTER_PATH}
+      - ADAPTER_SUBFOLDER=${ADAPTER_SUBFOLDER:-sft/final}
+      - ADAPTER_LOCAL_DIR=/models/adapters/spider-sft
+      - MAX_MODEL_LEN=${MAX_MODEL_LEN:-2048}
+      - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.85}
+      - MAX_LORA_RANK=${MAX_LORA_RANK:-16}
+      - PORT=8001
+    volumes:
+      - vllm-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/v1/models')",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 180s
+    restart: unless-stopped
+
+  # Optional: FastAPI on the same pod, proxying to local vLLM.
+  # Or run FastAPI locally with BACKEND=vllm and VLLM_BASE_URL=<proxy>/v1
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-api-gpu
+    ports:
+      - "8000:8000"
+    environment:
+      - BACKEND=vllm
+      - VLLM_BASE_URL=http://vllm:8001/v1
+      - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-spider-sft}
+      - VLLM_TIMEOUT_S=${VLLM_TIMEOUT_S:-180}
+      - VLLM_READY_TIMEOUT_S=${VLLM_READY_TIMEOUT_S:-600}
+      - REQUEST_LOG_PATH=/app/logs/requests.jsonl
+    volumes:
+      - ./logs:/app/logs
+      - ./ops/runpod/smoke_results:/app/smoke_results
+    depends_on:
+      vllm:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  vllm-models:

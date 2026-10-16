@@ -1,14 +1,15 @@
 """Prometheus metrics for the inference server.
 
-All latency / throughput series from Phase 1 reflect *simulated* mock timings.
-Do not interpret them as real GPU telemetry.
+Phase 1 mock timings remain available. Phase 2 adds backend/mode labels and
+real-inference series (TTFT, remote errors, output tok/s). Do not interpret
+``mode=simulated`` series as GPU telemetry.
 """
 
 from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram, Info
 
-# Histogram buckets suitable for p50/p95/p99 on mock latencies (seconds).
+# Histogram buckets suitable for p50/p95/p99 (seconds).
 LATENCY_BUCKETS = (
     0.005,
     0.01,
@@ -28,56 +29,90 @@ LATENCY_BUCKETS = (
     8.0,
     13.0,
     21.0,
+    34.0,
+    55.0,
+    90.0,
 )
 
 REQUESTS_TOTAL = Counter(
     "llm_requests_total",
-    "Total /generate requests",
-    labelnames=("status",),  # success | error
+    "Total /generate and /generate/stream requests",
+    labelnames=("status", "backend", "mode"),  # mode: simulated | real
 )
 
 IN_FLIGHT = Gauge(
     "llm_requests_in_flight",
-    "Number of /generate requests currently being handled",
+    "Number of inference requests currently being handled",
+    labelnames=("backend", "mode"),
 )
 
 QUEUE_DEPTH = Gauge(
     "llm_queue_depth",
-    "Requests waiting for the serialized inference worker",
+    "Requests waiting (mock lock) or in-flight HTTP calls (vllm)",
+    labelnames=("backend",),
 )
 
 QUEUE_WAIT = Histogram(
     "llm_queue_wait_seconds",
-    "Time spent waiting for the inference worker (simulated serialization)",
+    "Time spent waiting for the inference worker (mock serialization only)",
+    labelnames=("backend", "mode"),
     buckets=LATENCY_BUCKETS,
 )
 
 INFERENCE_DURATION = Histogram(
     "llm_inference_duration_seconds",
-    "Simulated inference execution time (prefill + decode)",
+    "Inference execution time (mock prefill+decode, or remote HTTP round-trip)",
+    labelnames=("backend", "mode"),
     buckets=LATENCY_BUCKETS,
 )
 
 REQUEST_LATENCY = Histogram(
     "llm_request_latency_seconds",
     "End-to-end /generate latency including queue wait",
+    labelnames=("backend", "mode"),
+    buckets=LATENCY_BUCKETS,
+)
+
+TTFT = Histogram(
+    "llm_ttft_seconds",
+    "Time to first token for streaming requests",
+    labelnames=("backend", "mode"),
     buckets=LATENCY_BUCKETS,
 )
 
 GENERATED_TOKENS = Counter(
     "llm_generated_tokens_total",
-    "Simulated output tokens produced",
+    "Output tokens produced",
+    labelnames=("backend", "mode"),
 )
 
 INPUT_TOKENS = Counter(
     "llm_input_tokens_total",
-    "Simulated input tokens estimated from prompt length",
+    "Input tokens (estimated for mock; from engine usage for vllm)",
+    labelnames=("backend", "mode"),
 )
 
-# Gauge updated per successful request: instantaneous simulated tokens/sec
+# Gauge updated per successful request: instantaneous tokens/sec
 SIM_OUTPUT_TOKENS_PER_SEC = Gauge(
     "llm_simulated_output_tokens_per_second",
-    "Simulated output tokens / inference_seconds for the last successful request",
+    "Output tokens / inference_seconds for the last successful mock request",
+)
+
+REAL_OUTPUT_TOKENS_PER_SEC = Gauge(
+    "llm_real_output_tokens_per_second",
+    "Output tokens / inference_seconds for the last successful real request",
+)
+
+REMOTE_ERRORS = Counter(
+    "llm_remote_errors_total",
+    "Remote vLLM / transport errors",
+    labelnames=("category",),
+)
+
+STREAM_REQUESTS = Counter(
+    "llm_stream_requests_total",
+    "Streaming /generate/stream requests",
+    labelnames=("status", "backend", "mode"),
 )
 
 APP_INFO = Info(
@@ -86,12 +121,16 @@ APP_INFO = Info(
 )
 
 
-def set_app_info(*, version: str, backend: str) -> None:
+def set_app_info(*, version: str, backend: str, mode: str) -> None:
     APP_INFO.info(
         {
             "version": version,
             "backend": backend,
-            "phase": "1",
-            "measurements": "simulated_mock",
+            "phase": "2" if backend == "vllm" else "1",
+            "measurements": mode,
         }
     )
+
+
+def mode_label(simulated: bool) -> str:
+    return "simulated" if simulated else "real"

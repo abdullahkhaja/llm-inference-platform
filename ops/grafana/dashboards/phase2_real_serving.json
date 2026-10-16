@@ -1,0 +1,141 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "text",
+      "title": "Phase 2 notice",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**REAL vs SIMULATED** — Filter on `mode=\"real\"` for remote vLLM. `mode=\"simulated\"` is the CPU mock. Client-side FastAPI metrics are not a substitute for vLLM's own `/metrics` on the GPU pod."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests / sec by mode",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_requests_total{mode=\"real\"}[1m]))",
+          "legendFormat": "real",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(llm_requests_total{mode=\"simulated\"}[1m]))",
+          "legendFormat": "simulated",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Output tokens / sec (real vs simulated gauges)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "llm_real_output_tokens_per_second",
+          "legendFormat": "real last req",
+          "refId": "A"
+        },
+        {
+          "expr": "llm_simulated_output_tokens_per_second",
+          "legendFormat": "simulated last req",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(llm_generated_tokens_total{mode=\"real\"}[1m]))",
+          "legendFormat": "real tok/s rate",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "End-to-end latency p50/p95/p99 (real)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(llm_request_latency_seconds_bucket{mode=\"real\"}[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_request_latency_seconds_bucket{mode=\"real\"}[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(llm_request_latency_seconds_bucket{mode=\"real\"}[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "TTFT (streaming, real)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(llm_ttft_seconds_bucket{mode=\"real\"}[5m])) by (le))",
+          "legendFormat": "p50 TTFT",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_ttft_seconds_bucket{mode=\"real\"}[5m])) by (le))",
+          "legendFormat": "p95 TTFT",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Remote errors + in-flight",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_remote_errors_total[1m])) by (category)",
+          "legendFormat": "{{category}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(llm_requests_in_flight)",
+          "legendFormat": "in_flight",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stream requests",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_stream_requests_total[1m])) by (status, mode)",
+          "legendFormat": "{{mode}} / {{status}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["llm", "phase2", "vllm"],
+  "time": { "from": "now-30m", "to": "now" },
+  "title": "Phase 2 — Real vs Simulated Serving",
+  "uid": "phase2-real-serving",
+  "version": 1
+}
