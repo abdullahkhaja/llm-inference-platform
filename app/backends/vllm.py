@@ -55,7 +55,11 @@ class VLLMBackend(Backend):
 
     @property
     def queue_depth(self) -> int:
-        # Remote queue depth is not exposed; report local in-flight HTTP calls.
+        # The vLLM scheduler queue is not visible from this HTTP client.
+        return 0
+
+    @property
+    def inflight(self) -> int:
         return self._in_flight
 
     async def startup(self) -> None:

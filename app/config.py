@@ -69,6 +69,21 @@ class Settings(BaseSettings):
         description="Max seconds to wait for /models readiness at startup",
     )
 
+    # vLLM process on the GPU host (not used to load weights in this API).
+    # V1 enables prefix caching unless --no-enable-prefix-caching is passed.
+    enable_prefix_caching: bool = True
+
+    # API admission. Off preserves Phase 2 forwarding with no extra queue.
+    admission_enabled: bool = False
+    max_concurrent_requests: int = Field(default=4, ge=1)
+    max_waiting_requests: int = Field(default=8, ge=0)
+    max_queue_wait_ms: int = Field(default=2000, ge=0)
+
+    # Optional tracing. Off by default; spans add overhead when enabled.
+    tracing_enabled: bool = False
+    otlp_endpoint: Optional[str] = None
+    trace_log_path: Optional[Path] = None
+
     # Input / output limits
     max_question_chars: int = 2_000
     max_schema_chars: int = 20_000

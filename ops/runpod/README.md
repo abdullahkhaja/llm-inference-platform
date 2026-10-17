@@ -4,7 +4,7 @@ Runbook for serving Llama 3.1 8B Instruct plus the Spider SFT adapter on a RunPo
 
 Session costs: [`../cost_tracker.md`](../cost_tracker.md).
 
-## Verified smoke (15 October 2026)
+## Verified smoke
 
 | Item | Value |
 | --- | --- |
@@ -41,8 +41,13 @@ Local mock development uses [`docker-compose.yml`](../../docker-compose.yml) and
 python3 -m vllm.entrypoints.openai.api_server
   --enable-lora
   --lora-modules spider-sft=/models/adapters/spider-sft
+  --enable-prefix-caching | --no-enable-prefix-caching
   --host 0.0.0.0 --port 8001
 ```
+
+`ENABLE_PREFIX_CACHING` (default `true`) selects the flag. vLLM 0.8.5 V1 turns prefix caching on when the flag is omitted, so the entrypoint always passes one of the two. Restart vLLM to switch. Keep the model, adapter, context length, and decoding settings the same when comparing on vs off. Prefix caching reuses a matching token prefix. It does not cache an answer for repeated text later in the prompt.
+
+API settings on the optional FastAPI service: `ADMISSION_ENABLED` (default `false`), `MAX_CONCURRENT_REQUESTS` (4), `MAX_WAITING_REQUESTS` (8), `MAX_QUEUE_WAIT_MS` (2000), `TRACING_ENABLED` (default `false`). Admission off preserves the Phase 2 forward path.
 
 The stock `vllm/vllm-openai` image provides `python3`, not `python`. The entrypoint selects `python3` first.
 
@@ -131,7 +136,34 @@ curl -s http://127.0.0.1:8000/healthz
 ./ops/runpod/cleanup.sh
 ```
 
-## 8. Troubleshooting
+## 8. Metrics on the GPU host
+
+[`docker-compose.gpu.yml`](../../docker-compose.gpu.yml) starts Prometheus with [`ops/prometheus.gpu.yml`](../prometheus.gpu.yml). It scrapes `api:8000/metrics` and `vllm:8001/metrics` on the Compose network and does not publish a host port.
+
+vLLM v0.8.5 serves metrics on the same port as the OpenAI API. A RunPod proxy for port 8001 therefore also exposes `/metrics`. That is a property of this vLLM build, not an extra port added here. Export before terminate:
+
+```bash
+curl -fsS http://127.0.0.1:8001/metrics -o ops/runpod/smoke_results/vllm_metrics.prom
+```
+
+Names this version is expected to emit are listed in [`app/vllm_metrics_catalog.py`](../../app/vllm_metrics_catalog.py). A missing series stays missing. Do not record it as zero. `vllm:num_requests_waiting` is the engine scheduler. `llm_admission_waiting` is the FastAPI queue. `llm_inflight_requests` is in-flight HTTP, not a queue.
+
+## 9. Optional Phase 3 check
+
+This does not create a pod. Rent an L4 yourself, start the stack, then on the pod:
+
+```bash
+export VLLM_BASE=http://127.0.0.1:8001
+export API_BASE=http://127.0.0.1:8000
+export VALIDATE_REQUESTS=4
+./ops/runpod/phase3_validate.sh
+```
+
+The script fails if `nvidia-smi` is missing, if `/metrics` lacks the running, waiting, or KV-cache series, or if health fails. `VALIDATE_REQUESTS` defaults to 4. It is a smoke of the tooling, not the Phase 4 campaign. To compare caching, run once with `ENABLE_PREFIX_CACHING=true`, restart vLLM with `false`, warm each process the same way, and keep the workload (`repeated-schema` vs `unrelated-schema`) identical aside from that flag.
+
+Copy `ops/runpod/smoke_results/` off the pod, add a cost-tracker row, then terminate. `cleanup.sh` does not stop billing.
+
+## 10. Troubleshooting
 
 Problems hit during the Phase 2 smoke, and the fix that worked.
 

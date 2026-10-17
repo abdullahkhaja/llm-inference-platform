@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app import __version__
+from app.admission import AdmissionRejected
 from app.backends import build_backend
 from app.backends.vllm import VLLMRemoteError
 from app.config import Settings, get_settings
@@ -20,6 +21,7 @@ from app.logging_config import RequestLogger, setup_logging
 from app.metrics import (
     GENERATED_TOKENS,
     IN_FLIGHT,
+    INFLIGHT,
     INFERENCE_DURATION,
     INPUT_TOKENS,
     QUEUE_DEPTH,
@@ -36,6 +38,8 @@ from app.metrics import (
 )
 from app.schemas import ErrorResponse, GenerateRequest, GenerateResponse, HealthResponse
 from app.serving import InferenceService
+from app.tracing import configure as configure_tracing
+from app.tracing import span
 
 # Module-level handles populated during lifespan
 _settings: Optional[Settings] = None
@@ -48,6 +52,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _settings, _service, _request_logger
     settings = get_settings()
     setup_logging(settings.log_level)
+    configure_tracing(
+        enabled=settings.tracing_enabled,
+        otlp_endpoint=settings.otlp_endpoint,
+        trace_log_path=str(settings.trace_log_path) if settings.trace_log_path else None,
+    )
     backend = build_backend(settings)
     await backend.startup()
     service = InferenceService(backend, settings)
@@ -139,6 +148,10 @@ async def healthz(request: Request) -> HealthResponse:
         ready=service.backend.ready,
         simulated=simulated,
         queue_depth=service.queue_depth,
+        inflight=service.backend.inflight,
+        admission_enabled=service.admission.enabled,
+        admission_active=service.admission.active,
+        admission_waiting=service.admission.waiting,
         version=__version__,
         vllm_base_url=settings.vllm_base_url if settings.backend == "vllm" else None,
         vllm_model_name=settings.vllm_model_name if settings.backend == "vllm" else None,
@@ -149,6 +162,7 @@ async def healthz(request: Request) -> HealthResponse:
 async def metrics(request: Request) -> Response:
     service = _get_service(request)
     QUEUE_DEPTH.labels(backend=service.backend.name).set(service.queue_depth)
+    INFLIGHT.labels(backend=service.backend.name).set(service.backend.inflight)
     payload = generate_latest()
     return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
 
@@ -169,7 +183,8 @@ async def generate(body: GenerateRequest, request: Request) -> GenerateResponse:
     service = _get_service(request)
     logger = _get_logger(request)
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-    _validate_generate(body, settings)
+    with span("request_validation", backend=service.backend.name):
+        _validate_generate(body, settings)
 
     backend_name = service.backend.name
     mode = settings.measurements_mode
@@ -209,8 +224,8 @@ async def generate(body: GenerateRequest, request: Request) -> GenerateResponse:
             backend=result.backend,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
-            queue_wait_s=result.queue_wait_s or 0.0,
-            inference_s=result.inference_s or 0.0,
+            queue_wait_s=result.queue_wait_s,
+            inference_s=result.inference_s,
             latency_s=latency_s,
             http_status=200,
             simulated=result.simulated,
@@ -242,6 +257,26 @@ async def generate(body: GenerateRequest, request: Request) -> GenerateResponse:
         )
     except HTTPException:
         raise
+    except AdmissionRejected as exc:
+        REQUESTS_TOTAL.labels(status="rejected", backend=backend_name, mode=mode).inc()
+        latency_s = time.perf_counter() - t0
+        logger.log(
+            request_id=request_id,
+            backend=backend_name,
+            input_tokens=0,
+            output_tokens=0,
+            queue_wait_s=None,
+            inference_s=None,
+            latency_s=latency_s,
+            http_status=503,
+            error_category=exc.reason,
+            simulated=backend_name == "mock",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=exc.reason,
+            headers={"Retry-After": str(exc.retry_after_s)},
+        ) from exc
     except VLLMRemoteError as exc:
         mode = "real"
         category = exc.category
@@ -255,8 +290,8 @@ async def generate(body: GenerateRequest, request: Request) -> GenerateResponse:
             backend=backend_name,
             input_tokens=0,
             output_tokens=0,
-            queue_wait_s=0.0,
-            inference_s=0.0,
+            queue_wait_s=None,
+            inference_s=None,
             latency_s=latency_s,
             http_status=http_status,
             error_category=error_category,
@@ -273,8 +308,8 @@ async def generate(body: GenerateRequest, request: Request) -> GenerateResponse:
             backend=backend_name,
             input_tokens=0,
             output_tokens=0,
-            queue_wait_s=0.0,
-            inference_s=0.0,
+            queue_wait_s=None,
+            inference_s=None,
             latency_s=latency_s,
             http_status=http_status,
             error_category=error_category,
@@ -296,7 +331,22 @@ async def generate_stream(body: GenerateRequest, request: Request) -> StreamingR
     service = _get_service(request)
     logger = _get_logger(request)
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-    _validate_generate(body, settings)
+    with span("request_validation", backend=service.backend.name):
+        _validate_generate(body, settings)
+    try:
+        with span("admission_wait", request_id=request_id):
+            lease = await service.admission.acquire()
+    except AdmissionRejected as exc:
+        REQUESTS_TOTAL.labels(
+            status="rejected",
+            backend=service.backend.name,
+            mode=settings.measurements_mode,
+        ).inc()
+        raise HTTPException(
+            status_code=503,
+            detail=exc.reason,
+            headers={"Retry-After": str(exc.retry_after_s)},
+        ) from exc
 
     backend_name = service.backend.name
     mode = settings.measurements_mode
@@ -313,6 +363,7 @@ async def generate_stream(body: GenerateRequest, request: Request) -> StreamingR
                 question=body.question,
                 schema=body.db_schema,
                 max_new_tokens=body.max_new_tokens,
+                lease=lease,
             ):
                 if await request.is_disconnected():
                     status = "cancelled"
@@ -364,6 +415,7 @@ async def generate_stream(body: GenerateRequest, request: Request) -> StreamingR
                 {"category": "server_error", "message": str(exc)},
             )
         finally:
+            await lease.release()
             latency_s = time.perf_counter() - t0
             REQUEST_LATENCY.labels(backend=backend_name, mode=mode).observe(latency_s)
             STREAM_REQUESTS.labels(
@@ -379,8 +431,8 @@ async def generate_stream(body: GenerateRequest, request: Request) -> StreamingR
                 backend=backend_name,
                 input_tokens=int(usage.get("input_tokens") or 0),
                 output_tokens=int(usage.get("output_tokens") or 0),
-                queue_wait_s=float(usage.get("queue_wait_s") or 0.0),
-                inference_s=float(usage.get("inference_s") or 0.0),
+                queue_wait_s=usage.get("queue_wait_s"),
+                inference_s=usage.get("inference_s"),
                 latency_s=latency_s,
                 http_status=200 if status == "success" else 499 if status == "cancelled" else 502,
                 error_category=None if status == "success" else status,
@@ -404,7 +456,9 @@ async def generate_stream(body: GenerateRequest, request: Request) -> StreamingR
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     request_id = request.headers.get("x-request-id")
     category = "client_error" if exc.status_code < 500 else "server_error"
-    if exc.status_code == 501:
+    if exc.status_code == 503 and str(exc.detail) in {"admission_full", "admission_timeout"}:
+        category = str(exc.detail)
+    elif exc.status_code == 501:
         category = "not_implemented"
     elif exc.status_code == 413:
         category = "payload_too_large"
@@ -419,6 +473,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             error=str(exc.detail),
             category=category,
         ).model_dump(),
+        headers=dict(exc.headers or {}),
     )
 
 

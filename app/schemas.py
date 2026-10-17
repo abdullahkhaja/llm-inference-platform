@@ -60,6 +60,10 @@ class HealthResponse(BaseModel):
     ready: bool
     simulated: bool = True
     queue_depth: int = 0
+    inflight: int = 0
+    admission_enabled: bool = False
+    admission_active: int = 0
+    admission_waiting: int = 0
     version: str
     vllm_base_url: Optional[str] = None
     vllm_model_name: Optional[str] = None

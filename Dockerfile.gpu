@@ -10,8 +10,9 @@ FROM ${VLLM_IMAGE}
 USER root
 RUN pip install --no-cache-dir "huggingface_hub>=0.30,<2"
 COPY ops/runpod/resolve_adapter.py /usr/local/bin/resolve_adapter.py
+COPY ops/runpod/vllm_flags.py /usr/local/bin/vllm_flags.py
 COPY ops/runpod/entrypoint.sh /usr/local/bin/vllm-lora-entrypoint.sh
-RUN chmod +x /usr/local/bin/vllm-lora-entrypoint.sh /usr/local/bin/resolve_adapter.py
+RUN chmod +x /usr/local/bin/vllm-lora-entrypoint.sh /usr/local/bin/resolve_adapter.py /usr/local/bin/vllm_flags.py
 
 ENV HF_HOME=/models/hf-cache \
     TRANSFORMERS_CACHE=/models/hf-cache \
@@ -24,6 +25,7 @@ ENV HF_HOME=/models/hf-cache \
     MAX_MODEL_LEN=2048 \
     GPU_MEMORY_UTILIZATION=0.85 \
     MAX_LORA_RANK=16 \
+    ENABLE_PREFIX_CACHING=true \
     PORT=8001
 
 VOLUME ["/models"]

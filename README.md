@@ -10,7 +10,7 @@ Local development uses a CPU mock. Real weights run only on a rented GPU.
 | --- | --- |
 | 1 | Complete — mock API, Docker, metrics, load tests |
 | 2 | Complete — remote vLLM, LoRA, streaming, RunPod smoke |
-| 3 | Planned — caching, admission control, latency breakdown |
+| 3 | Validated on a RunPod L4 — caching, admission, metrics, tracing, and a short real benchmark. Not a Phase 4 study |
 | 4 | Planned — GPU benchmarks and cost-per-request |
 
 ## Key results
@@ -45,15 +45,17 @@ On 15 October 2026 a RunPod NVIDIA L4 (Secure Cloud) running `vllm/vllm-openai:v
 **Observability**
 
 - Prometheus metrics labeled `backend` and `mode=simulated|real`
-- Grafana dashboards for mock serving and real vs simulated serving
+- Grafana dashboards for mock serving, real vs simulated serving, and Phase 3 admission / engine panels
 - JSONL request logs
 - Latency histograms, time to first token, and output tokens/sec
+- Optional OpenTelemetry spans on the API path (`TRACING_ENABLED=false` by default)
 
 **Benchmarking**
 
-- Concurrent load tests against `/generate`
-- Requests/sec, latency percentiles, output token throughput
-- Failure and timeout counts
+- Closed-loop concurrency and open-loop arrival rate
+- Synthetic short, medium, long, repeated-schema, and unrelated-schema workloads
+- Requests/sec, successful requests/sec, latency percentiles, rejections, and goodput
+- Experiment plans for prefix caching, admission, and concurrency (executed in Phase 4)
 
 ## Architecture
 
@@ -62,7 +64,8 @@ Training writes the adapter. The serving process does not import the training pa
 ```mermaid
 flowchart LR
   Client[Client] --> API[FastAPI]
-  API --> Sel{BACKEND}
+  API --> Admit[Admission control<br/>optional]
+  Admit --> Sel{BACKEND}
   Sel -->|mock| Mock[MockBackend<br/>CPU simulated timings]
   Sel -->|vllm| Remote[VLLMBackend<br/>async HTTP]
   Remote --> Pod[RunPod proxy :8001]
@@ -157,6 +160,7 @@ Prometheus scrapes FastAPI `/metrics` ([`ops/prometheus.yml`](ops/prometheus.yml
 
 - [Phase 1 — Simulated Mock Serving](ops/grafana/dashboards/phase1_mock_serving.json)
 - [Phase 2 — Real vs Simulated Serving](ops/grafana/dashboards/phase2_real_serving.json)
+- [Phase 3 — Admission, Cache, and Engine](ops/grafana/dashboards/phase3_serving.json)
 
 | Series | Meaning |
 | --- | --- |
@@ -167,10 +171,26 @@ Prometheus scrapes FastAPI `/metrics` ([`ops/prometheus.yml`](ops/prometheus.yml
 | `llm_simulated_output_tokens_per_second` | Last successful mock request |
 | `llm_real_output_tokens_per_second` | Last successful vLLM request |
 | `llm_remote_errors_total` | Remote / transport errors by category |
+| `llm_admission_active` / `llm_admission_waiting` | API admission slots. Off when admission is disabled |
+| `llm_admission_rejected_total` | API rejections (`full`, `wait_timeout`) |
+| `llm_inflight_requests` | HTTP calls inside the backend client. Not a queue |
+| `llm_queue_depth` | API waiters (mock lock, or admission queue when enabled). Not the vLLM scheduler |
 
 `mode=simulated` is not GPU telemetry. Each request is also appended to `logs/requests.jsonl` (`REQUEST_LOG_PATH`). Prompt text is omitted unless `LOG_PROMPTS=true`.
 
-vLLM’s own `/metrics` on the GPU host are not scraped yet.
+On a GPU host, [`ops/prometheus.gpu.yml`](ops/prometheus.gpu.yml) scrapes FastAPI and vLLM on the Compose network. That Prometheus service does not publish a host port. vLLM v0.8.5 serves `/metrics` on the same port as the API (`8001`). A public proxy to `8001` can also reach `/metrics`. Copy `curl localhost:8001/metrics` off the pod before you terminate it. Empty `vllm:*` panels mean the series was not scraped. They are not zeros. Histogram quantiles on the dashboard are bucket estimates. Exact percentiles come from `bench/` request records.
+
+## Phase 3 controls
+
+Implemented in this tree. Not yet measured on a GPU, so there are no cache-hit, latency, or throughput claims here.
+
+**Prefix caching.** `ENABLE_PREFIX_CACHING=true|false` becomes `--enable-prefix-caching` or `--no-enable-prefix-caching` on vLLM 0.8.5. The flag is always passed, because a V1 engine (the engine the L4 smoke started) enables caching when the flag is omitted. Changing it restarts vLLM. Caching reuses a matching token prefix. It is not an application answer cache.
+
+**Admission.** `ADMISSION_ENABLED=false` by default, which forwards as in Phase 2. When enabled, `MAX_CONCURRENT_REQUESTS` (default 4) bounds active remote calls and `MAX_WAITING_REQUESTS` (default 8) bounds waiters. A full queue returns HTTP 503 with `Retry-After`. `MAX_QUEUE_WAIT_MS` (default 2000) bounds how long a waiter blocks. A streaming request holds its slot until the stream ends or the client disconnects. This is overload protection, not a per-client rate limit, and it does not replace vLLM’s scheduler.
+
+**Tracing.** `TRACING_ENABLED=false` by default. When on, spans cover validation, admission wait, prompt assembly, the remote HTTP call or mock inference, and the stream. They do not record prompts, schemas, or tokens. They are not GPU prefill or decode times. Tracing adds overhead; leave it off for performance runs. Optional OTLP export needs `opentelemetry-exporter-otlp-proto-http`, which is not in the default requirements.
+
+**Workloads.** `bench/workloads.py` builds synthetic SQL prompts (not Spider downloads): `short`, `medium`, `long`, `repeated-schema`, `unrelated-schema`. Plans for the Phase 4 comparisons are in `bench/experiments.py`.
 
 ## Benchmarking
 
@@ -180,7 +200,11 @@ CPU mock (default 20 requests per concurrency; raise `--requests` for tighter pe
 
 ```bash
 python -m bench.load_test --base-url http://127.0.0.1:8000 --concurrency 1,2,4,8 --requests 20 --analyze
+python -m bench.load_test --pattern open --arrival-rate 2 --duration 5 --workload repeated-schema --requests 1
+python -m bench.experiments --out bench/results/phase3_experiment_plan.json
 ```
+
+`rps` in the summary is successful requests divided by wall time. `offered_rps` counts every attempt, including 503s and timeouts. Missing queue or inference timings stay null. `--latency-objective` adds `goodput_rps` for successes at or under that latency. p99 from fewer than 1,000 successes is marked unreliable.
 
 Three different measurements:
 
@@ -201,8 +225,10 @@ app/
   serving.py              Request path shared by both backends
   backends/mock.py        CPU mock
   backends/vllm.py        Remote vLLM client
+  admission.py            Optional API backpressure
   metrics.py              Prometheus series
-bench/                    Load test and analysis
+  tracing.py              Optional OpenTelemetry spans
+bench/                    Load test, workloads, experiment plans
 ops/
   prometheus.yml
   grafana/                Dashboards and provisioning
@@ -221,7 +247,7 @@ docker-compose.gpu.yml    GPU host: vLLM and optional API
 
 **Phase 2 — complete.** Remote vLLM client, retries, LoRA serving, SSE streaming, real vs simulated metrics, RunPod scripts, L4 smoke test.
 
-**Phase 3 — planned.** Prefix caching, admission control, latency decomposition, and finer tracing.
+**Phase 3 — validated on one L4 session.** Prefix caching on and off, admission (including a 503), vLLM `/metrics`, Prometheus scrapes of the API and vLLM, API traces, and short closed-loop and open-loop benches all ran against `spider-sft`. Samples are small. They are not the Phase 4 result. Raw files are in `bench/results/phase3_validation/` and are not committed.
 
 **Phase 4 — planned.** GPU benchmark comparison: tokens/sec, p95/p99, utilization, and cost per successful request from the final benchmark run.
 
@@ -238,8 +264,8 @@ Limits:
 
 - Mock timings are a fixed prefill plus per-token model. They are not a GPU.
 - Phase 2 smoke checked correctness of the path (model listed, SQL returned, `simulated: false`). It is not a capacity study.
-- Queue-wait histograms describe the mock lock. The vLLM client does not report the engine’s internal queue.
-- GPU memory, KV-cache hit rate, and invoice-backed cost-per-request are not measured yet.
+- `llm_queue_wait_seconds` is the mock lock. Engine queue time is `vllm:request_queue_time_seconds` when that series is scraped.
+- GPU KV-cache hit rate and invoice-backed cost-per-request are not measured yet. Phase 3 only prepares the measurement path.
 - Real serving needs a GPU pod, a Hugging Face token, and access to the gated base model and adapter.
 
 Training: [`training/finetune_spider.py`](training/finetune_spider.py), [`training/requirements-training.txt`](training/requirements-training.txt).

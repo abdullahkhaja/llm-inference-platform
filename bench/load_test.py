@@ -33,12 +33,26 @@ class RequestRecord:
     ok: bool
     http_status: int
     latency_s: float
-    queue_wait_ms: float
-    inference_ms: float
+    queue_wait_ms: Optional[float]
+    inference_ms: Optional[float]
     output_tokens: int
     input_tokens: int
     error: str
     simulated: bool = True
+
+
+def arrival_times(rate: float, duration_s: float, start: float = 0.0) -> list[float]:
+    """Monotonic open-loop schedule. Offered count does not depend on latency."""
+    if rate <= 0 or duration_s <= 0:
+        return []
+    step = 1.0 / rate
+    times: list[float] = []
+    t = start
+    end = start + duration_s
+    while t < end - 1e-12:
+        times.append(t)
+        t += step
+    return times
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -61,6 +75,7 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
     queue_waits = [r.queue_wait_ms for r in ok if r.queue_wait_ms is not None]
     failures = len(records) - len(ok)
     timeouts = sum(1 for r in records if "timeout" in r.error.lower())
+    rejected = [r for r in records if r.http_status == 503]
     total_out_tokens = sum(r.output_tokens for r in ok)
     simulated = all(r.simulated for r in ok) if ok else True
     tok_key = (
@@ -78,9 +93,12 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
         "successes": len(ok),
         "failures": failures,
         "timeouts": timeouts,
+        "rejections": len(rejected),
+        "offered": len(records),
         "failure_rate": failures / len(records) if records else 0.0,
         "timeout_rate": timeouts / len(records) if records else 0.0,
         "wall_seconds": wall_s,
+        "offered_rps": len(records) / wall_s if wall_s > 0 else 0.0,
         "rps": len(ok) / wall_s if wall_s > 0 else 0.0,
         tok_key: total_out_tokens / wall_s if wall_s > 0 else 0.0,
         "mean_latency_s": statistics.fmean(latencies) if latencies else float("nan"),
@@ -93,7 +111,12 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
         "p99_caveat": (
             "p99 estimates from small samples are unreliable; "
             "use --requests 1000+ for stronger tail-latency signal"
+            if len(ok) < 1000
+            else "empirical percentile of successful requests only"
         ),
+        "p50_rejection_latency_s": percentile([r.latency_s for r in rejected], 50)
+        if rejected
+        else None,
     }
 
 
@@ -105,10 +128,12 @@ async def one_request(
     index: int,
     max_new_tokens: int,
     timeout_s: float,
+    question: str = DEFAULT_QUESTION,
+    schema: str = DEFAULT_SCHEMA,
 ) -> RequestRecord:
     payload = {
-        "question": DEFAULT_QUESTION,
-        "schema": DEFAULT_SCHEMA,
+        "question": question,
+        "schema": schema,
         "max_new_tokens": max_new_tokens,
     }
     t0 = time.perf_counter()
@@ -122,8 +147,8 @@ async def one_request(
                 ok=False,
                 http_status=resp.status_code,
                 latency_s=latency,
-                queue_wait_ms=0.0,
-                inference_ms=0.0,
+                queue_wait_ms=None,
+                inference_ms=None,
                 output_tokens=0,
                 input_tokens=0,
                 error=resp.text[:200],
@@ -137,8 +162,8 @@ async def one_request(
             ok=True,
             http_status=200,
             latency_s=latency,
-            queue_wait_ms=float(qw) if qw is not None else 0.0,
-            inference_ms=float(inf) if inf is not None else 0.0,
+            queue_wait_ms=float(qw) if qw is not None else None,
+            inference_ms=float(inf) if inf is not None else None,
             output_tokens=int(data.get("output_tokens", 0)),
             input_tokens=int(data.get("input_tokens", 0)),
             error="",
@@ -151,8 +176,8 @@ async def one_request(
             ok=False,
             http_status=0,
             latency_s=time.perf_counter() - t0,
-            queue_wait_ms=0.0,
-            inference_ms=0.0,
+            queue_wait_ms=None,
+            inference_ms=None,
             output_tokens=0,
             input_tokens=0,
             error=f"timeout: {exc}",
@@ -164,8 +189,8 @@ async def one_request(
             ok=False,
             http_status=0,
             latency_s=time.perf_counter() - t0,
-            queue_wait_ms=0.0,
-            inference_ms=0.0,
+            queue_wait_ms=None,
+            inference_ms=None,
             output_tokens=0,
             input_tokens=0,
             error=str(exc),
@@ -179,7 +204,11 @@ async def run_concurrency(
     requests: int,
     max_new_tokens: int,
     timeout_s: float,
+    workload: str = "short",
+    seed: int = 42,
 ) -> tuple[list[RequestRecord], dict]:
+    from bench.workloads import item
+
     url = base_url.rstrip("/") + "/generate"
     sem = asyncio.Semaphore(concurrency)
     records: list[RequestRecord] = []
@@ -187,6 +216,7 @@ async def run_concurrency(
     async with httpx.AsyncClient() as client:
         async def worker(i: int) -> None:
             async with sem:
+                work = item(workload, i + seed)
                 rec = await one_request(
                     client,
                     url,
@@ -194,6 +224,8 @@ async def run_concurrency(
                     index=i,
                     max_new_tokens=max_new_tokens,
                     timeout_s=timeout_s,
+                    question=work.question,
+                    schema=work.schema,
                 )
                 records.append(rec)
 
@@ -204,6 +236,63 @@ async def run_concurrency(
     records.sort(key=lambda r: r.index)
     summary = summarize(records, wall_s)
     summary["concurrency"] = concurrency
+    summary["max_new_tokens"] = max_new_tokens
+    summary["workload"] = workload
+    summary["pattern"] = "closed-loop"
+    summary["synthetic_workload"] = True
+    return records, summary
+
+
+async def run_open_loop(
+    *,
+    base_url: str,
+    rate: float,
+    duration_s: float,
+    max_new_tokens: int,
+    timeout_s: float,
+    workload: str = "short",
+    seed: int = 42,
+) -> tuple[list[RequestRecord], dict]:
+    """Schedule arrivals on a monotonic clock. Do not wait for completions."""
+    from bench.workloads import item
+
+    url = base_url.rstrip("/") + "/generate"
+    times = arrival_times(rate, duration_s)
+    records: list[RequestRecord] = []
+
+    async with httpx.AsyncClient() as client:
+        async def launch(i: int, when: float, origin: float) -> RequestRecord:
+            delay = origin + when - time.perf_counter()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            work = item(workload, i + seed)
+            return await one_request(
+                client,
+                url,
+                concurrency=0,
+                index=i,
+                max_new_tokens=max_new_tokens,
+                timeout_s=timeout_s,
+                question=work.question,
+                schema=work.schema,
+            )
+
+        origin = time.perf_counter()
+        wall0 = origin
+        records = list(
+            await asyncio.gather(
+                *(launch(i, when, origin) for i, when in enumerate(times))
+            )
+        )
+        wall_s = time.perf_counter() - wall0
+
+    summary = summarize(records, wall_s)
+    summary["concurrency"] = 0
+    summary["arrival_rate"] = rate
+    summary["offered_rate"] = rate
+    summary["pattern"] = "open-loop"
+    summary["workload"] = workload
+    summary["synthetic_workload"] = True
     summary["max_new_tokens"] = max_new_tokens
     return records, summary
 
@@ -267,6 +356,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run analyze.py after writing CSVs",
     )
+    p.add_argument(
+        "--workload",
+        default="short",
+        help="short|medium|long|repeated-schema|unrelated-schema (synthetic)",
+    )
+    p.add_argument(
+        "--pattern",
+        default="closed",
+        choices=("closed", "open"),
+        help="closed: fixed concurrency. open: arrival rate independent of latency",
+    )
+    p.add_argument("--arrival-rate", type=float, default=1.0, help="Open-loop requests/sec")
+    p.add_argument("--duration", type=float, default=5.0, help="Open-loop seconds")
+    p.add_argument("--experiment-id", default="")
+    p.add_argument("--gpu", default="")
+    p.add_argument("--prefix-caching", default="", help="true|false if known for this run")
+    p.add_argument("--admission", default="", help="true|false if known for this run")
+    p.add_argument(
+        "--latency-objective",
+        type=float,
+        default=None,
+        help="Seconds. goodput counts successes at or under this latency",
+    )
     return p.parse_args()
 
 
@@ -289,15 +401,44 @@ async def amain() -> None:
 
     all_summaries: list[dict] = []
     label = args.label
+    if args.pattern == "open":
+        levels = [0]
     for c in levels:
-        print(f"\n--- concurrency={c} ---")
-        records, summary = await run_concurrency(
+        print(f"\n--- pattern={args.pattern} concurrency={c} ---")
+        if args.pattern == "open":
+            records, summary = await run_open_loop(
+                base_url=args.base_url,
+                rate=args.arrival_rate,
+                duration_s=args.duration,
+                max_new_tokens=args.max_new_tokens,
+                timeout_s=args.timeout,
+                workload=args.workload,
+                seed=args.seed,
+            )
+        else:
+            records, summary = await run_concurrency(
             base_url=args.base_url,
             concurrency=c,
             requests=args.requests,
             max_new_tokens=args.max_new_tokens,
             timeout_s=args.timeout,
+            workload=args.workload,
+            seed=args.seed,
         )
+        summary["experiment_id"] = args.experiment_id or None
+        summary["gpu"] = args.gpu or None
+        summary["prefix_caching"] = args.prefix_caching or None
+        summary["admission"] = args.admission or None
+        summary["vllm_version"] = "v0.8.5" if label == "real" or args.label == "real" else None
+        if args.latency_objective is not None:
+            good = sum(
+                1
+                for rec in records
+                if rec.ok and rec.latency_s <= args.latency_objective
+            )
+            summary["latency_objective_s"] = args.latency_objective
+            wall = float(summary["wall_seconds"])
+            summary["goodput_rps"] = good / wall if wall > 0 else 0.0
         if label == "auto":
             label = "simulated" if summary.get("simulated", True) else "real"
         if args.backend_info:

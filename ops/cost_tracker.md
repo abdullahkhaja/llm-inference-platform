@@ -6,7 +6,7 @@ There is no fixed spending cap. Sessions should stay short: terminate idle pods,
 
 ## GPU session history
 
-Quoted rate for these sessions: **$0.59/hour** (NVIDIA L4, Secure Cloud). Estimated dollars are `duration_hours × 0.59`, rounded to the cent. They add up to the **$0.46** spent through Phase 2.
+Quoted rate for these sessions: **$0.59/hour** (NVIDIA L4, Secure Cloud). Estimated dollars are `duration_hours × 0.59`, rounded to the cent. The Phase 2 rows add up to the **$0.46** spent through Phase 2. The Phase 3 row is not part of that confirmed total.
 
 | Date (UTC) | Phase | Purpose | GPU | $/hr (quoted) | Duration (min) | Est. $ | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -14,16 +14,22 @@ Quoted rate for these sessions: **$0.59/hour** (NVIDIA L4, Secure Cloud). Estima
 | 2026-10-15 | 2 | Failed startup | L4 Secure | 0.59 | ~37 | 0.36 | Boot script called `python`; image only has `python3`. Proxy never became ready. Terminated |
 | 2026-10-15 | 2 | Crash-loop retry | L4 Secure | 0.59 | ~1 | 0.01 | Same `python` entrypoint. Terminated immediately |
 | 2026-10-15 | 2 | Successful smoke test | L4 Secure | 0.59 | ~7 | 0.07 | EU-RO-1. `spider-sft` served real SQL (`simulated: false`). Terminated after the smoke |
+| 2026-10-17 | 3 | Phase 3 validation | L4 Secure | 0.59 | ~27 | 0.27 | EU-RO-1. Terminated after the validation |
 
 ## Cost summary
 
+Figures below are estimates, not an invoice.
+
 | Bucket | Amount (USD) |
 | --- | --- |
-| Phase 2 sessions (estimates above) | 0.46 |
-| Spent so far (all phases) | **0.46** |
+| Phase 2 session estimates | 0.46 |
+| Phase 3 session estimate | 0.27 |
+| Estimated sessions so far | **0.73** |
 | All phases, after Phase 4 | — |
 
 Failed startups are development cost. They are not part of inference cost-per-request.
+
+The Phase 3 row is `duration × $0.59`, so $0.27 is an estimate.
 
 ## Cost per successful request
 

@@ -25,6 +25,7 @@ services:
       - MAX_MODEL_LEN=${MAX_MODEL_LEN:-2048}
       - GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.85}
       - MAX_LORA_RANK=${MAX_LORA_RANK:-16}
+      - ENABLE_PREFIX_CACHING=${ENABLE_PREFIX_CACHING:-true}
       - PORT=8001
     volumes:
       - vllm-models:/models
@@ -39,7 +40,7 @@ services:
       test:
         [
           "CMD",
-          "python",
+          "python3",
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/v1/models')",
         ]
@@ -64,6 +65,11 @@ services:
       - VLLM_MODEL_NAME=${VLLM_MODEL_NAME:-spider-sft}
       - VLLM_TIMEOUT_S=${VLLM_TIMEOUT_S:-180}
       - VLLM_READY_TIMEOUT_S=${VLLM_READY_TIMEOUT_S:-600}
+      - ADMISSION_ENABLED=${ADMISSION_ENABLED:-false}
+      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-4}
+      - MAX_WAITING_REQUESTS=${MAX_WAITING_REQUESTS:-8}
+      - MAX_QUEUE_WAIT_MS=${MAX_QUEUE_WAIT_MS:-2000}
+      - TRACING_ENABLED=${TRACING_ENABLED:-false}
       - REQUEST_LOG_PATH=/app/logs/requests.jsonl
     volumes:
       - ./logs:/app/logs
@@ -71,6 +77,18 @@ services:
     depends_on:
       vllm:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Scrapes the API and vLLM on the compose network. No host port: do not
+  # publish this as a RunPod proxy. vLLM still serves /metrics on :8001.
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: llm-prometheus-gpu
+    volumes:
+      - ./ops/prometheus.gpu.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - vllm
+      - api
     restart: unless-stopped
 
 volumes:

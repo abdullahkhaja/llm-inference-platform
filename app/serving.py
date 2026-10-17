@@ -9,12 +9,14 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, AsyncIterator
 
+from app.admission import AdmissionController, AdmissionLease
 from app.backends.base import (
     Backend,
     GenerationRequest,
     GenerationResult,
     StreamEvent,
 )
+from app.tracing import span
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -56,12 +58,20 @@ def build_prompt(question: str, schema: str) -> str:
 class InferenceService:
     """Thin service wrapping a Backend with shared timing measurement."""
 
-    def __init__(self, backend: Backend, settings: Settings) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        settings: Settings,
+        admission: AdmissionController | None = None,
+    ) -> None:
         self.backend = backend
         self.settings = settings
+        self.admission = admission or AdmissionController.from_settings(settings)
 
     @property
     def queue_depth(self) -> int:
+        if self.admission.enabled:
+            return self.admission.waiting
         return self.backend.queue_depth
 
     def _make_request(
@@ -91,15 +101,34 @@ class InferenceService:
         max_new_tokens: int,
     ) -> tuple[GenerationResult, float]:
         """Run inference and return (result, end_to_end_latency_s)."""
-        req = self._make_request(
-            request_id=request_id,
-            question=question,
-            schema=schema,
-            max_new_tokens=max_new_tokens,
-        )
+        with span("prompt_assembly", request_id=request_id, backend=self.backend.name):
+            req = self._make_request(
+                request_id=request_id,
+                question=question,
+                schema=schema,
+                max_new_tokens=max_new_tokens,
+            )
         t0 = time.perf_counter()
-        result = await self.backend.generate(req)
-        latency_s = time.perf_counter() - t0
+        with span("admission_wait", request_id=request_id):
+            lease = await self.admission.acquire()
+        try:
+            with span(
+                "remote_http" if self.backend.name == "vllm" else "mock_inference",
+                request_id=request_id,
+                backend=self.backend.name,
+                simulated=self.backend.name == "mock",
+            ):
+                result = await self.backend.generate(req)
+        finally:
+            await lease.release()
+        with span(
+            "response_processing",
+            request_id=request_id,
+            backend=self.backend.name,
+            simulated=self.backend.name == "mock",
+        ):
+            latency_s = time.perf_counter() - t0
+            result.metadata.setdefault("admission_enabled", self.admission.enabled)
         return result, latency_s
 
     async def generate_stream(
@@ -109,13 +138,33 @@ class InferenceService:
         question: str,
         schema: str,
         max_new_tokens: int,
+        lease: AdmissionLease | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        """Stream inference events from the backend."""
-        req = self._make_request(
-            request_id=request_id,
-            question=question,
-            schema=schema,
-            max_new_tokens=max_new_tokens,
-        )
-        async for event in self.backend.generate_stream(req):
-            yield event
+        """Stream inference events from the backend.
+
+        A provided lease is held until the generator finishes or is closed.
+        The slot is not released when StreamingResponse is constructed.
+        """
+        owned = lease
+        try:
+            with span("prompt_assembly", request_id=request_id, backend=self.backend.name):
+                req = self._make_request(
+                    request_id=request_id,
+                    question=question,
+                    schema=schema,
+                    max_new_tokens=max_new_tokens,
+                )
+            if owned is None:
+                with span("admission_wait", request_id=request_id):
+                    owned = await self.admission.acquire()
+            with span(
+                "streaming",
+                request_id=request_id,
+                backend=self.backend.name,
+                simulated=self.backend.name == "mock",
+            ):
+                async for event in self.backend.generate_stream(req):
+                    yield event
+        finally:
+            if owned is not None:
+                await owned.release()

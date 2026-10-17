@@ -1,0 +1,161 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "text",
+      "title": "Phase 3 notice",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Three layers.** `mode=\"simulated\"` is the CPU mock. FastAPI `llm_*` series are client-side. `vllm:*` series exist only when Prometheus scrapes the engine (`ops/prometheus.gpu.yml`). An empty vLLM panel means the series was not scraped, not that the value is zero. Histogram quantiles are bucket estimates; exact percentiles come from `bench/` request records."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "API requests/sec",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_requests_total{status=\"success\"}[1m]))",
+          "legendFormat": "success",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(llm_requests_total{status=\"rejected\"}[1m]))",
+          "legendFormat": "rejected",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(llm_requests_total{status=\"error\"}[1m]))",
+          "legendFormat": "error",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "API latency p50/p95/p99 (bucket estimate)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(llm_request_latency_seconds_bucket{mode=\"real\"}[2m])) by (le))",
+          "legendFormat": "p50 real",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_request_latency_seconds_bucket{mode=\"real\"}[2m])) by (le))",
+          "legendFormat": "p95 real",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(llm_request_latency_seconds_bucket{mode=\"real\"}[2m])) by (le))",
+          "legendFormat": "p99 real",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "API TTFT (streaming)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_ttft_seconds_bucket{mode=\"real\"}[2m])) by (le))",
+          "legendFormat": "p95 real",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Admission queue vs in-flight HTTP",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "llm_admission_active", "legendFormat": "admission active", "refId": "A" },
+        { "expr": "llm_admission_waiting", "legendFormat": "admission waiting", "refId": "B" },
+        { "expr": "sum(llm_inflight_requests)", "legendFormat": "backend in-flight", "refId": "C" },
+        { "expr": "sum(llm_queue_depth)", "legendFormat": "API wait depth", "refId": "D" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Admission rejections/sec",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_admission_rejected_total[1m])) by (reason)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "vLLM scheduler queue (engine)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "vllm:num_requests_running", "legendFormat": "running", "refId": "A" },
+        { "expr": "vllm:num_requests_waiting", "legendFormat": "waiting", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "vLLM KV-cache usage",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "vllm:gpu_cache_usage_perc", "legendFormat": "gpu cache", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "vLLM prefix-cache hit ratio (5m)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:gpu_prefix_cache_hits_total[5m])) / sum(rate(vllm:gpu_prefix_cache_queries_total[5m]))",
+          "legendFormat": "hit ratio",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "vLLM engine TTFT and prefill/decode (bucket estimate)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket[2m])) by (le))",
+          "legendFormat": "engine ttft p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket[2m])) by (le))",
+          "legendFormat": "prefill p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:request_decode_time_seconds_bucket[2m])) by (le))",
+          "legendFormat": "decode p95",
+          "refId": "C"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["llm", "phase3"],
+  "time": { "from": "now-30m", "to": "now" },
+  "title": "Phase 3 — Admission, Cache, and Engine",
+  "uid": "phase3-serving",
+  "version": 1
+}

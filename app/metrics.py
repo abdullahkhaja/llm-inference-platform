@@ -48,8 +48,41 @@ IN_FLIGHT = Gauge(
 
 QUEUE_DEPTH = Gauge(
     "llm_queue_depth",
-    "Requests waiting (mock lock) or in-flight HTTP calls (vllm)",
+    "Requests waiting at the API (mock lock or admission queue). Not the vLLM scheduler queue.",
     labelnames=("backend",),
+)
+
+INFLIGHT = Gauge(
+    "llm_inflight_requests",
+    "HTTP requests currently inside the backend client. Not queued.",
+    labelnames=("backend",),
+)
+
+ADMISSION_ACTIVE = Gauge(
+    "llm_admission_active",
+    "Requests that hold an admission slot",
+)
+
+ADMISSION_WAITING = Gauge(
+    "llm_admission_waiting",
+    "Requests waiting for an admission slot",
+)
+
+ADMISSION_REJECTED = Counter(
+    "llm_admission_rejected_total",
+    "Requests rejected by API admission control",
+    labelnames=("reason",),
+)
+
+ADMISSION_WAIT = Histogram(
+    "llm_admission_wait_seconds",
+    "Time from admission acquire start until a slot is held",
+    buckets=LATENCY_BUCKETS,
+)
+
+ADMISSION_TIMEOUTS = Counter(
+    "llm_admission_timeouts_total",
+    "Admission waits that exceeded MAX_QUEUE_WAIT_MS",
 )
 
 QUEUE_WAIT = Histogram(

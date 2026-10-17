@@ -43,8 +43,8 @@ class RequestLogger:
         backend: str,
         input_tokens: int,
         output_tokens: int,
-        queue_wait_s: float,
-        inference_s: float,
+        queue_wait_s: Optional[float],
+        inference_s: Optional[float],
         latency_s: float,
         http_status: int,
         error_category: Optional[str] = None,
@@ -58,8 +58,12 @@ class RequestLogger:
             "simulated": simulated,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "queue_wait_ms": round(queue_wait_s * 1000.0, 3),
-            "inference_ms": round(inference_s * 1000.0, 3),
+            "queue_wait_ms": None
+            if queue_wait_s is None
+            else round(queue_wait_s * 1000.0, 3),
+            "inference_ms": None
+            if inference_s is None
+            else round(inference_s * 1000.0, 3),
             "latency_ms": round(latency_s * 1000.0, 3),
             "http_status": http_status,
             "error_category": error_category,

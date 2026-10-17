@@ -42,8 +42,12 @@ def load_request_csvs(
                         "concurrency": int(row["concurrency"]),
                         "ok": row["ok"].lower() == "true",
                         "latency_s": float(row["latency_s"]),
-                        "queue_wait_ms": float(row["queue_wait_ms"]),
-                        "inference_ms": float(row["inference_ms"]),
+                        "queue_wait_ms": float(row["queue_wait_ms"])
+                        if row.get("queue_wait_ms") not in (None, "")
+                        else None,
+                        "inference_ms": float(row["inference_ms"])
+                        if row.get("inference_ms") not in (None, "")
+                        else None,
                         "output_tokens": int(row["output_tokens"]),
                         "simulated": (
                             row.get("simulated", str(simulated)).lower() == "true"
@@ -63,7 +67,7 @@ def aggregate(rows: list[dict]) -> list[dict]:
     for c in sorted(by_c):
         group = by_c[c]
         lat = [r["latency_s"] for r in group]
-        qw = [r["queue_wait_ms"] for r in group]
+        qw = [r["queue_wait_ms"] for r in group if r["queue_wait_ms"] is not None]
         simulated = all(r.get("simulated", True) for r in group)
         summaries.append(
             {
@@ -74,7 +78,7 @@ def aggregate(rows: list[dict]) -> list[dict]:
                 "p50_latency_s": percentile(lat, 50),
                 "p95_latency_s": percentile(lat, 95),
                 "p99_latency_s": percentile(lat, 99),
-                "mean_queue_wait_ms": sum(qw) / len(qw),
+                "mean_queue_wait_ms": (sum(qw) / len(qw)) if qw else float("nan"),
             }
         )
     return summaries

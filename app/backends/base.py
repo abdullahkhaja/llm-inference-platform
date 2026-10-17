@@ -81,7 +81,12 @@ class Backend(ABC):
     @property
     @abstractmethod
     def queue_depth(self) -> int:
-        """Number of requests waiting / in-flight at the backend layer."""
+        """Requests waiting at this backend. Not in-flight work."""
+
+    @property
+    def inflight(self) -> int:
+        """Requests currently executing in this backend. Not a queue."""
+        return 0
 
     @property
     def ready(self) -> bool:

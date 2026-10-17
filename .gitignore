@@ -26,6 +26,7 @@ logs/
 bench/results/*.csv
 bench/results/*.json
 bench/results/*.png
+bench/results/phase3_validation/
 !bench/results/.gitkeep
 
 # RunPod smoke artifacts (keep directory via .gitkeep)
@@ -59,6 +60,7 @@ _nb_extract.txt
 # Local one-off RunPod helpers (not part of the published ops scripts)
 ops/runpod/_*.py
 ops/runpod/NOTES.local.md
+ops/runpod/.phase3_ssh/
 
 # Private engineering notes (never publish)
 notes/
