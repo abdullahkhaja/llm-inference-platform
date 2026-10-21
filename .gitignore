@@ -61,6 +61,8 @@ _nb_extract.txt
 ops/runpod/_*.py
 ops/runpod/NOTES.local.md
 ops/runpod/.phase3_ssh/
+ops/runpod/.phase4_session.json
+bench/results/phase4/
 
 # Private engineering notes (never publish)
 notes/

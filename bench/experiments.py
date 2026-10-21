@@ -35,6 +35,7 @@ def plans() -> dict[str, Any]:
             "conditions": [
                 {"enable_prefix_caching": False, "workload": "repeated-schema"},
                 {"enable_prefix_caching": True, "workload": "repeated-schema"},
+                {"enable_prefix_caching": False, "workload": "unrelated-schema"},
                 {"enable_prefix_caching": True, "workload": "unrelated-schema"},
             ],
             "restart_vllm_between_cache_flags": True,

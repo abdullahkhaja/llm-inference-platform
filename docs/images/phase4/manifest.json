@@ -1,0 +1,146 @@
+[
+  {
+    "file": "/work/src/docs/images/phase4/grafana-overview.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": null,
+    "from": "2026-10-20T20:35:26.928831+00:00",
+    "to": "2026-10-20T21:35:30.796601+00:00",
+    "bytes": 124388,
+    "ok": true,
+    "experiment_id": "ALL",
+    "config": {
+      "prefix_caching": null,
+      "admission": null,
+      "concurrency": null,
+      "workload": "all-completed"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/prefix-cache-off.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": null,
+    "from": "2026-10-20T20:35:26.928831+00:00",
+    "to": "2026-10-20T20:40:52.545889+00:00",
+    "bytes": 106752,
+    "ok": true,
+    "experiment_id": "A-repeated-off",
+    "config": {
+      "prefix_caching": "off",
+      "admission": null,
+      "concurrency": 4,
+      "workload": "repeated-schema"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/prefix-cache-on.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": null,
+    "from": "2026-10-20T20:46:13.360256+00:00",
+    "to": "2026-10-20T20:51:25.433628+00:00",
+    "bytes": 108965,
+    "ok": true,
+    "experiment_id": "A-repeated-on",
+    "config": {
+      "prefix_caching": "on",
+      "admission": null,
+      "concurrency": 4,
+      "workload": "repeated-schema"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/prefix-cache-hit-ratio.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": 9,
+    "from": "2026-10-20T20:46:13.360256+00:00",
+    "to": "2026-10-20T20:51:25.433628+00:00",
+    "bytes": 39668,
+    "ok": true,
+    "experiment_id": "A-repeated-on",
+    "config": {
+      "prefix_caching": "on",
+      "admission": null,
+      "concurrency": 4,
+      "workload": "repeated-schema"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/admission-overload.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": null,
+    "from": "2026-10-20T21:05:47.209979+00:00",
+    "to": "2026-10-20T21:06:49.226704+00:00",
+    "bytes": 119733,
+    "ok": true,
+    "experiment_id": "B-above-on",
+    "config": {
+      "prefix_caching": null,
+      "admission": "on",
+      "concurrency": 4,
+      "workload": "short"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/admission-rejections.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": 6,
+    "from": "2026-10-20T21:05:47.209979+00:00",
+    "to": "2026-10-20T21:06:49.226704+00:00",
+    "bytes": 38459,
+    "ok": true,
+    "experiment_id": "B-above-on",
+    "config": {
+      "prefix_caching": null,
+      "admission": "on",
+      "concurrency": 4,
+      "workload": "short"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/concurrency-throughput.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": 2,
+    "from": "2026-10-20T21:06:58.447240+00:00",
+    "to": "2026-10-20T21:35:30.796601+00:00",
+    "bytes": 29431,
+    "ok": true,
+    "experiment_id": "C-sweep",
+    "config": {
+      "prefix_caching": null,
+      "admission": "off",
+      "concurrency": "1-16",
+      "workload": "short"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/concurrency-latency.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": 3,
+    "from": "2026-10-20T21:06:58.447240+00:00",
+    "to": "2026-10-20T21:35:30.796601+00:00",
+    "bytes": 36785,
+    "ok": true,
+    "experiment_id": "C-sweep",
+    "config": {
+      "prefix_caching": null,
+      "admission": "off",
+      "concurrency": "1-16",
+      "workload": "short"
+    }
+  },
+  {
+    "file": "/work/src/docs/images/phase4/gpu-kv-cache.png",
+    "dashboard_uid": "phase3-serving",
+    "panel_id": 8,
+    "from": "2026-10-20T21:06:58.447240+00:00",
+    "to": "2026-10-20T21:35:30.796601+00:00",
+    "bytes": 62902,
+    "ok": true,
+    "experiment_id": "C-sweep",
+    "config": {
+      "prefix_caching": null,
+      "admission": "off",
+      "concurrency": "1-16",
+      "workload": "short"
+    }
+  }
+]

@@ -39,6 +39,7 @@ class RequestRecord:
     input_tokens: int
     error: str
     simulated: bool = True
+    ttft_ms: Optional[float] = None
 
 
 def arrival_times(rate: float, duration_s: float, start: float = 0.0) -> list[float]:
@@ -69,7 +70,12 @@ def percentile(values: list[float], p: float) -> float:
     return ordered[f] + (ordered[c] - ordered[f]) * (k - f)
 
 
-def summarize(records: list[RequestRecord], wall_s: float) -> dict:
+def summarize(
+    records: list[RequestRecord],
+    wall_s: float,
+    *,
+    arrival_window_s: Optional[float] = None,
+) -> dict:
     ok = [r for r in records if r.ok]
     latencies = [r.latency_s for r in ok]
     queue_waits = [r.queue_wait_ms for r in ok if r.queue_wait_ms is not None]
@@ -77,6 +83,8 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
     timeouts = sum(1 for r in records if "timeout" in r.error.lower())
     rejected = [r for r in records if r.http_status == 503]
     total_out_tokens = sum(r.output_tokens for r in ok)
+    ttfts = [r.ttft_ms for r in ok if r.ttft_ms is not None]
+    offer_window = arrival_window_s if arrival_window_s and arrival_window_s > 0 else wall_s
     simulated = all(r.simulated for r in ok) if ok else True
     tok_key = (
         "simulated_output_tokens_per_sec" if simulated else "output_tokens_per_sec"
@@ -98,7 +106,8 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
         "failure_rate": failures / len(records) if records else 0.0,
         "timeout_rate": timeouts / len(records) if records else 0.0,
         "wall_seconds": wall_s,
-        "offered_rps": len(records) / wall_s if wall_s > 0 else 0.0,
+        "arrival_window_s": arrival_window_s,
+        "offered_rps": len(records) / offer_window if offer_window > 0 else 0.0,
         "rps": len(ok) / wall_s if wall_s > 0 else 0.0,
         tok_key: total_out_tokens / wall_s if wall_s > 0 else 0.0,
         "mean_latency_s": statistics.fmean(latencies) if latencies else float("nan"),
@@ -117,6 +126,9 @@ def summarize(records: list[RequestRecord], wall_s: float) -> dict:
         "p50_rejection_latency_s": percentile([r.latency_s for r in rejected], 50)
         if rejected
         else None,
+        "mean_ttft_ms": statistics.fmean(ttfts) if ttfts else None,
+        "p50_ttft_ms": percentile(ttfts, 50) if ttfts else None,
+        "p95_ttft_ms": percentile(ttfts, 95) if ttfts else None,
     }
 
 
@@ -194,6 +206,119 @@ async def one_request(
             output_tokens=0,
             input_tokens=0,
             error=str(exc),
+        )
+
+
+def first_content_token_ttft_s(blocks: list[tuple[float, str]]) -> Optional[float]:
+    """Elapsed seconds to the first SSE token event with nonempty text.
+
+    ``blocks`` are ``(elapsed_s, sse_chunk)``. A ``meta`` event is not content.
+    """
+    for elapsed, chunk in blocks:
+        event = "message"
+        data_lines: list[str] = []
+        for line in chunk.splitlines():
+            if line.startswith("event:"):
+                event = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].strip())
+        if event != "token" or not data_lines:
+            continue
+        try:
+            payload = json.loads("\n".join(data_lines))
+        except json.JSONDecodeError:
+            continue
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if isinstance(text, str) and text.strip():
+            return elapsed
+    return None
+
+
+async def one_stream_request(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    concurrency: int,
+    index: int,
+    max_new_tokens: int,
+    timeout_s: float,
+    question: str = DEFAULT_QUESTION,
+    schema: str = DEFAULT_SCHEMA,
+) -> RequestRecord:
+    """POST /generate/stream and time the first nonempty content token."""
+    payload = {
+        "question": question,
+        "schema": schema,
+        "max_new_tokens": max_new_tokens,
+    }
+    t0 = time.perf_counter()
+    blocks: list[tuple[float, str]] = []
+    buffer = ""
+    usage: dict = {}
+    simulated = True
+    try:
+        async with client.stream("POST", url, json=payload, timeout=timeout_s) as resp:
+            if resp.status_code != 200:
+                body = (await resp.aread()).decode("utf-8", errors="replace")[:200]
+                return RequestRecord(
+                    concurrency=concurrency,
+                    index=index,
+                    ok=False,
+                    http_status=resp.status_code,
+                    latency_s=time.perf_counter() - t0,
+                    queue_wait_ms=None,
+                    inference_ms=None,
+                    output_tokens=0,
+                    input_tokens=0,
+                    error=body,
+                )
+            async for piece in resp.aiter_text():
+                buffer += piece
+                while "\n\n" in buffer:
+                    raw, buffer = buffer.split("\n\n", 1)
+                    elapsed = time.perf_counter() - t0
+                    blocks.append((elapsed, raw))
+                    if "event: usage" in raw:
+                        data_lines = [
+                            line.split(":", 1)[1].strip()
+                            for line in raw.splitlines()
+                            if line.startswith("data:")
+                        ]
+                        if data_lines:
+                            try:
+                                usage = json.loads("\n".join(data_lines))
+                            except json.JSONDecodeError:
+                                usage = {}
+        latency = time.perf_counter() - t0
+        ttft = first_content_token_ttft_s(blocks)
+        simulated = bool(usage.get("simulated", True)) if usage else True
+        return RequestRecord(
+            concurrency=concurrency,
+            index=index,
+            ok=True,
+            http_status=200,
+            latency_s=latency,
+            queue_wait_ms=None,
+            inference_ms=(
+                float(usage["inference_s"]) * 1000.0
+                if usage.get("inference_s") is not None
+                else None
+            ),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            error="",
+            simulated=simulated,
+            ttft_ms=None if ttft is None else round(ttft * 1000.0, 3),
+        )
+    except httpx.TimeoutException as exc:
+        return RequestRecord(
+            concurrency, index, False, 0, time.perf_counter() - t0,
+            None, None, 0, 0, f"timeout: {exc}", True, None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return RequestRecord(
+            concurrency, index, False, 0, time.perf_counter() - t0,
+            None, None, 0, 0, str(exc), True, None,
         )
 
 
@@ -286,7 +411,7 @@ async def run_open_loop(
         )
         wall_s = time.perf_counter() - wall0
 
-    summary = summarize(records, wall_s)
+    summary = summarize(records, wall_s, arrival_window_s=duration_s)
     summary["concurrency"] = 0
     summary["arrival_rate"] = rate
     summary["offered_rate"] = rate
