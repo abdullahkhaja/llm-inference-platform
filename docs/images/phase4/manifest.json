@@ -1,6 +1,6 @@
 [
   {
-    "file": "/work/src/docs/images/phase4/grafana-overview.png",
+    "file": "docs/images/phase4/grafana-overview.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": null,
     "from": "2026-10-20T20:35:26.928831+00:00",
@@ -16,7 +16,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/prefix-cache-off.png",
+    "file": "docs/images/phase4/prefix-cache-off.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": null,
     "from": "2026-10-20T20:35:26.928831+00:00",
@@ -32,7 +32,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/prefix-cache-on.png",
+    "file": "docs/images/phase4/prefix-cache-on.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": null,
     "from": "2026-10-20T20:46:13.360256+00:00",
@@ -48,7 +48,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/prefix-cache-hit-ratio.png",
+    "file": "docs/images/phase4/prefix-cache-hit-ratio.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": 9,
     "from": "2026-10-20T20:46:13.360256+00:00",
@@ -64,7 +64,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/admission-overload.png",
+    "file": "docs/images/phase4/admission-overload.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": null,
     "from": "2026-10-20T21:05:47.209979+00:00",
@@ -80,7 +80,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/admission-rejections.png",
+    "file": "docs/images/phase4/admission-rejections.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": 6,
     "from": "2026-10-20T21:05:47.209979+00:00",
@@ -96,7 +96,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/concurrency-throughput.png",
+    "file": "docs/images/phase4/concurrency-throughput.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": 2,
     "from": "2026-10-20T21:06:58.447240+00:00",
@@ -112,7 +112,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/concurrency-latency.png",
+    "file": "docs/images/phase4/concurrency-latency.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": 3,
     "from": "2026-10-20T21:06:58.447240+00:00",
@@ -128,7 +128,7 @@
     }
   },
   {
-    "file": "/work/src/docs/images/phase4/gpu-kv-cache.png",
+    "file": "docs/images/phase4/gpu-kv-cache.png",
     "dashboard_uid": "phase3-serving",
     "panel_id": 8,
     "from": "2026-10-20T21:06:58.447240+00:00",
